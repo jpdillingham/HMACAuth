@@ -84,33 +84,34 @@ namespace HMACAuth
             HeaderNames.Authorization,
             HeaderNames.Date,
             HeaderNames.RequestId,
-            HeaderNames.ContentLength,
-            HeaderNames.ContentMD5
+            HeaderNames.ContentLength
         };
 
-        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+        protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
         {
-            static Task<AuthenticateResult> Fail(string reason, AuthenticationProperties props = null) =>
-                Task.FromResult(AuthenticateResult.Fail(reason, props));
+            if (!IsHMACAuthorization(Request)) 
+            {
+                return AuthenticateResult.NoResult();
+            }
+
+            if (!TryValidateAuthorizationHeader(Request, out var credentials, out var message))
+            {
+                return AuthenticateResult.Fail($"Invalid HMAC Authorization: {message}");
+            }
 
             if (!TryValidateRequiredHeaders(Request, RequiredHeaders, out var missingHeaders))
             {
-                return Fail($"Missing one or more required headers: {missingHeaders}");
+                return AuthenticateResult.Fail($"Missing one or more required headers: {missingHeaders}");
             }
 
-            if (!TryValidateRequestTime(Request, out var message))
+            if (!TryValidateRequestTime(Request, out message))
             {
-                return Fail($"something about request being too old");
-            }
-
-            if (!TryValidateAuthorizationHeader(Request, out var credentials, out message))
-            {
-                return Fail($"Invalid Authorization header value: {message}");
+                return AuthenticateResult.Fail($"something about request being too old");
             }
 
             if (!Secrets.ContainsKey(credentials.Key))
             {
-                return Fail("Unrecognized access key");
+                return AuthenticateResult.Fail("Unrecognized access key");
             }
 
             var secret = Secrets[credentials.Key];
@@ -119,6 +120,10 @@ namespace HMACAuth
 
             throw new NotImplementedException();
         }
+
+        public bool IsHMACAuthorization(HttpRequest request) =>
+            request.Headers[HeaderNames.Authorization]
+                .Any(value => value.StartsWith("HMAC", StringComparison.InvariantCultureIgnoreCase));
 
         public bool TryValidateRequestTime(HttpRequest request, out string message)
         {
@@ -152,12 +157,12 @@ namespace HMACAuth
 
             if (headers.Count > 1)
             {
-                error = "Multiple Authorization headers provided with request";
+                error = "Multiple HMAC Authorization headers provided with request";
                 return false;
             }
 
             var header = headers[0];
-            var pattern = "^hmac [a-zA-Z0-9-]{36}:[a-zA-Z0-9]{64}$";
+            var pattern = "^HMAC [a-zA-Z0-9-]{36}:[a-zA-Z0-9]{64}$";
 
             if (!Regex.IsMatch(header, pattern, RegexOptions.IgnoreCase))
             {
