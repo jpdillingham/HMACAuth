@@ -90,11 +90,10 @@ namespace HMACAuth
                 return Task.FromResult(AuthenticateResult.Fail("Invalid Authorization header value, expected 'HMAC <access key>:<message digest>'"));
             }
 
-            if (Secrets.ContainsKey(credentials.Key))
+            if (!Secrets.ContainsKey(credentials.Key))
             {
                 return Task.FromResult(AuthenticateResult.Fail("Unrecognized access key"));
             }
-
 
             throw new NotImplementedException();
         }
