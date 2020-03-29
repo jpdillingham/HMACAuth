@@ -42,13 +42,8 @@ namespace HMACAuth
             services.AddAuthentication("HMAC")
                 .AddScheme<HMACAuthenticationOptions, HMACAuthenticationHandler>("HMAC", options => 
                 {
-                    options.ClockDrift = new TimeSpan(hours: 0, minutes: 5, seconds: 0);
-                    options.RequiredHeaders = new[] { 
-                        HeaderNames.Date, 
-                        HeaderNames.RequestId, 
-                        HeaderNames.Authorization, 
-                        HeaderNames.ContentLength
-                    };
+                    options.DateTimeFormat = "yyyy-MM-ddTHH:mm:ss.fffK";
+                    options.ClockDrift = new TimeSpan(hours: 24, minutes: 0, seconds: 0);
                 });
         }
 
@@ -60,8 +55,6 @@ namespace HMACAuth
                 app.UseDeveloperExceptionPage();
             }
             
-            app.UseHttpsRedirection();
-
             app.UseRouting();
 
             app.UseAuthentication();
@@ -83,6 +76,14 @@ namespace HMACAuth
         }
 
         private Dictionary<string, string> Secrets { get; } = new Dictionary<string, string>();
+        private IEnumerable<string> RequiredSignatureHeaders { get; } = new[] 
+        { 
+            HeaderNames.Date, 
+            HeaderNames.RequestId, 
+            HeaderNames.Authorization, 
+            HeaderNames.ContentLength,
+            HeaderNames.ContentMD5
+        };
 
         protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
         {
@@ -91,84 +92,93 @@ namespace HMACAuth
                 return AuthenticateResult.NoResult();
             }
 
+            AuthenticateResult Fail(string message)
+            {
+                return AuthenticateResult.Fail(message);
+            }
+
             if (!Request.TryGetHMACCredentials(out var credentials, out var error))
             {
-                return AuthenticateResult.Fail($"Invalid HMAC Authorization: {error}");
+                return Fail($"Invalid HMAC Authorization: {error}");
             }
 
-            if (!Request.HasRequiredHeaders(Options.RequiredHeaders, out var missingHeaders))
+            if (!Request.HasRequiredSignatureHeaders(RequiredSignatureHeaders, out var missingHeaders))
             {
-                return AuthenticateResult.Fail($"Missing one or more required headers: {missingHeaders}");
+                return Fail($"Missing one or more required headers: {missingHeaders}");
             }
 
-            if (!Request.HasAcceptableClockDrift(Clock, Options.ClockDrift, out var timestamp))
+            if (!Request.HasAcceptableClockDrift(Clock, Options.ClockDrift, Options.DateTimeFormat, out var timestamp, out error))
             {
-                return AuthenticateResult.Fail($"something about request being too old");
+                return Fail($"Invalid Date value: {error}");
             }
 
             if (!Secrets.ContainsKey(credentials.Key))
             {
-                return AuthenticateResult.Fail("Unrecognized access key");
+                return Fail("Unrecognized access key");
             }
 
-            var secret = Encoding.UTF8.GetBytes(Secrets[credentials.Key]);
+            var parts = new string[]
+            {
+                Request.Method,
+                Request.Path,
+                Request.QueryString.Value,
+                Request.Headers[HeaderNames.RequestId],
+                timestamp.ToString(Options.DateTimeFormat),
+                $"{Request.ContentLength ?? 0}",
+                await Request.GetBodyMD5()
+            };
 
-            var signature = new StringBuilder()
-                .AppendLine(Request.Method)
-                .AppendLine(Request.Path)
-                .AppendLine(Request.QueryString.Value)
-                .AppendLine(timestamp.ToString("o"))
-                .AppendLine($"{(Request.ContentLength ?? 0)}")
-                .Append(await Request.GetBodyMD5());
-
+            var signature = Encoding.UTF8.GetBytes(string.Join(':', parts));
+            var key = Convert.FromBase64String(Secrets[credentials.Key]);
             var digest = string.Empty;
 
-            using (HMAC hmac = new HMACSHA256(secret))
+            using (HMAC hmac = new HMACSHA256(key))
             {
-                digest = Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(signature.ToString())));
+                digest = Convert.ToBase64String(hmac.ComputeHash(signature));
             }
 
             if (digest == credentials.Digest)
             {
+                Logger.LogInformation($"Request from {Request.HttpContext.Connection.RemoteIpAddress} authenticated successfully.");
                 return AuthenticateResult.Success(new AuthenticationTicket(
                     new GenericPrincipal(new GenericIdentity(credentials.Key), new[] { "ApiKeyHolder" }), new AuthenticationProperties() { IsPersistent = false, AllowRefresh = false }, "HMAC"));
             }
 
-            return AuthenticateResult.Fail("Invalid digest");
+            return Fail($"Invalid digest; computed {digest}, received {credentials.Digest}");
         }
     }
 
     public static class HMACAuthenticationExtensions
     {
+        public static string Md5(this string text)
+        {
+            using var md5 = MD5.Create();
+            byte[] data = md5.ComputeHash(Encoding.UTF8.GetBytes(text));
+
+            StringBuilder builder = new StringBuilder();
+
+            for (int i = 0; i < data.Length; i++)
+            {
+                builder.Append(data[i].ToString("x2"));
+            }
+
+            return builder.ToString();
+        }
+
         public static async Task<string> GetBodyMD5(this HttpRequest request)
         {
             request.EnableBuffering();
 
             try
             {
-                // Leave the body open so the next middleware can read it.
-                using (var reader = new StreamReader(
-                request.Body,
-                encoding: Encoding.UTF8,
-                detectEncodingFromByteOrderMarks: false,
-                leaveOpen: true))
-                {
-                    var body = await reader.ReadToEndAsync();
+                using var reader = new StreamReader(
+                    request.Body,
+                    encoding: Encoding.UTF8,
+                    detectEncodingFromByteOrderMarks: false,
+                    leaveOpen: true);
 
-                    using (var md5 = MD5.Create())
-                    {
-                        byte[] data = md5.ComputeHash(Encoding.UTF8.GetBytes(body));
-
-                        StringBuilder builder = new StringBuilder();
-
-                        for (int i = 0; i < data.Length; i++)
-                        {
-                            builder.Append(data[i].ToString("x2"));
-                        }
-
-                        return builder.ToString();
-                    }
-                }
+                var body = await reader.ReadToEndAsync();
+                return body.Md5();
             }
             finally
             {
@@ -176,24 +186,27 @@ namespace HMACAuth
             }
         }
 
-        public static bool HasAcceptableClockDrift(this HttpRequest request, ISystemClock systemClock, TimeSpan allowedClockDrift, out DateTime timestamp)
+        public static bool HasAcceptableClockDrift(this HttpRequest request, ISystemClock systemClock, TimeSpan allowedClockDrift, string dateTimeFormat, out DateTime timestamp, out string error)
         {
             var date = request.Headers[HeaderNames.Date];
+            error = null;
 
-            if (!DateTime.TryParseExact(date, "o", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out timestamp))
-            { 
+            if (!DateTime.TryParseExact(date, dateTimeFormat, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out timestamp))
+            {
+                error = $"Invalid format; expected {DateTime.UnixEpoch.ToString(dateTimeFormat)}, received {date}";
                 return false;
             }
 
             if (timestamp > systemClock.UtcNow.Add(allowedClockDrift) || timestamp < systemClock.UtcNow.Subtract(allowedClockDrift))
             {
+                error = $"Clock drift exceeds allowance; server time {systemClock.UtcNow.ToString(dateTimeFormat)}, request time {timestamp.ToString(dateTimeFormat)}";
                 return false;
             }
 
             return true;
         }
 
-        public static bool HasRequiredHeaders(this HttpRequest request, IEnumerable<string> requiredHeaders, out string missingHeaders)
+        public static bool HasRequiredSignatureHeaders(this HttpRequest request, IEnumerable<string> requiredHeaders, out string missingHeaders)
         {
             missingHeaders = null;
             var missing = requiredHeaders.Where(header => string.IsNullOrEmpty(request.Headers[header]));
@@ -254,20 +267,18 @@ namespace HMACAuth
         {
         }
 
+        public string DateTimeFormat { get; set; } = "yyyy-MM-ddTHH:mm:ss.fffK";
         public TimeSpan ClockDrift { get; set; } = new TimeSpan(hours: 0, minutes: 5, seconds: 0);
-        public IEnumerable<string> RequiredHeaders { get; set; }
     }
 
     public static class Utility
     {
         public static string GenerateSecretKey()
         {
-            using (var cryptoProvider = new RNGCryptoServiceProvider())
-            {
-                byte[] secretKeyByteArray = new byte[32]; //256 bit
-                cryptoProvider.GetBytes(secretKeyByteArray);
-                return Convert.ToBase64String(secretKeyByteArray);
-            }
+            using var cryptoProvider = new RNGCryptoServiceProvider();
+            byte[] secretKeyByteArray = new byte[32]; //256 bit
+            cryptoProvider.GetBytes(secretKeyByteArray);
+            return Convert.ToBase64String(secretKeyByteArray);
         }
     }
 }
