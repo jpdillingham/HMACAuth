@@ -86,8 +86,6 @@ namespace HMACAuth
 
         protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
         {
-            //var bodyMD5 = await Request.GetBodyMD5();
-            //Console.WriteLine(bodyMD5);
             if (!Request.HasHMACAuthorizationHeader())
             {
                 return AuthenticateResult.NoResult();
