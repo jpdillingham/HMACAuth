@@ -24,6 +24,15 @@ namespace HMACAuth.Controllers
             _logger = logger;
         }
 
+        [HttpPost]
+        [Route("foo")]
+        [Authorize(Roles = "ApiKeyHolder")]
+        public IActionResult Post([FromBody]string body)
+        {
+            Console.WriteLine($"body: {body}");
+            return Ok();
+        }
+
         [HttpGet]
         [Authorize(Roles = "ApiKeyHolder")]
         public IEnumerable<WeatherForecast> Get()

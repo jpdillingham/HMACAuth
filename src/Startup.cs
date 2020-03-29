@@ -1,8 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Security.Cryptography;
+using System.Security.Principal;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -36,7 +40,16 @@ namespace HMACAuth
             services.AddControllers();
 
             services.AddAuthentication("HMAC")
-                .AddScheme<HMACAuthenticationOptions, HMACAuthenticationHandler>("HMAC", options => { });
+                .AddScheme<HMACAuthenticationOptions, HMACAuthenticationHandler>("HMAC", options => 
+                {
+                    options.ClockDrift = new TimeSpan(hours: 0, minutes: 5, seconds: 0);
+                    options.RequiredHeaders = new[] { 
+                        HeaderNames.Date, 
+                        HeaderNames.RequestId, 
+                        HeaderNames.Authorization, 
+                        HeaderNames.ContentLength
+                    };
+                });
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
@@ -46,20 +59,10 @@ namespace HMACAuth
             {
                 app.UseDeveloperExceptionPage();
             }
-
+            
             app.UseHttpsRedirection();
 
             app.UseRouting();
-
-            app.Use(async (context, next) =>
-            {
-                if (context.Request.Headers[HeaderNames.Authorization] != "test")
-                {
-                    context.Response.StatusCode = 401;
-                }
-
-                await next();
-            });
 
             app.UseAuthentication();
             app.UseAuthorization();
@@ -73,38 +76,34 @@ namespace HMACAuth
 
     public class HMACAuthenticationHandler : AuthenticationHandler<HMACAuthenticationOptions>
     {
-        public HMACAuthenticationHandler(IOptionsMonitor<HMACAuthenticationOptions> options, ILoggerFactory logger, UrlEncoder urlEncoder, ISystemClock systemClock)
-            : base(options, logger, urlEncoder, systemClock)
+        public HMACAuthenticationHandler(IOptionsMonitor<HMACAuthenticationOptions> optionsMonitor, ILoggerFactory logger, UrlEncoder urlEncoder, ISystemClock systemClock)
+            : base(optionsMonitor, logger, urlEncoder, systemClock)
         {
             Secrets.Add("088546f2-aba0-49d0-9323-4b07bf926ab1", "pWN4NAwKk+SUokEvDNZ4fcX3t2ozTFPgypXKchk1ulM=");
         }
 
         private Dictionary<string, string> Secrets { get; } = new Dictionary<string, string>();
-        private string[] RequiredHeaders { get; } = new[] {
-            HeaderNames.Authorization,
-            HeaderNames.Date,
-            HeaderNames.RequestId,
-            HeaderNames.ContentLength
-        };
 
         protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
         {
-            if (!IsHMACAuthorization(Request)) 
+            //var bodyMD5 = await Request.GetBodyMD5();
+            //Console.WriteLine(bodyMD5);
+            if (!Request.HasHMACAuthorizationHeader())
             {
                 return AuthenticateResult.NoResult();
             }
 
-            if (!TryValidateAuthorizationHeader(Request, out var credentials, out var message))
+            if (!Request.TryGetHMACCredentials(out var credentials, out var error))
             {
-                return AuthenticateResult.Fail($"Invalid HMAC Authorization: {message}");
+                return AuthenticateResult.Fail($"Invalid HMAC Authorization: {error}");
             }
 
-            if (!TryValidateRequiredHeaders(Request, RequiredHeaders, out var missingHeaders))
+            if (!Request.HasRequiredHeaders(Options.RequiredHeaders, out var missingHeaders))
             {
                 return AuthenticateResult.Fail($"Missing one or more required headers: {missingHeaders}");
             }
 
-            if (!TryValidateRequestTime(Request, out message))
+            if (!Request.HasAcceptableClockDrift(Clock, Options.ClockDrift, out var timestamp))
             {
                 return AuthenticateResult.Fail($"something about request being too old");
             }
@@ -114,30 +113,92 @@ namespace HMACAuth
                 return AuthenticateResult.Fail("Unrecognized access key");
             }
 
-            var secret = Secrets[credentials.Key];
+            var secret = Encoding.UTF8.GetBytes(Secrets[credentials.Key]);
 
-            // todo: compute digest and compare
+            var signature = new StringBuilder()
+                .AppendLine(Request.Method)
+                .AppendLine(Request.Path)
+                .AppendLine(Request.QueryString.Value)
+                .AppendLine(timestamp.ToString("o"))
+                .AppendLine($"{(Request.ContentLength ?? 0)}")
+                .Append(await Request.GetBodyMD5());
 
-            throw new NotImplementedException();
+            var digest = string.Empty;
+
+            using (HMAC hmac = new HMACSHA256(secret))
+            {
+                digest = Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(signature.ToString())));
+            }
+
+            if (digest == credentials.Digest)
+            {
+                return AuthenticateResult.Success(new AuthenticationTicket(
+                    new GenericPrincipal(new GenericIdentity(credentials.Key), new[] { "ApiKeyHolder" }), new AuthenticationProperties() { IsPersistent = false, AllowRefresh = false }, "HMAC"));
+            }
+
+            return AuthenticateResult.Fail("Invalid digest");
+        }
+    }
+
+    public static class HMACAuthenticationExtensions
+    {
+        public static async Task<string> GetBodyMD5(this HttpRequest request)
+        {
+            request.EnableBuffering();
+
+            try
+            {
+                // Leave the body open so the next middleware can read it.
+                using (var reader = new StreamReader(
+                request.Body,
+                encoding: Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: false,
+                leaveOpen: true))
+                {
+                    var body = await reader.ReadToEndAsync();
+
+                    using (var md5 = MD5.Create())
+                    {
+                        byte[] data = md5.ComputeHash(Encoding.UTF8.GetBytes(body));
+
+                        StringBuilder builder = new StringBuilder();
+
+                        for (int i = 0; i < data.Length; i++)
+                        {
+                            builder.Append(data[i].ToString("x2"));
+                        }
+
+                        return builder.ToString();
+                    }
+                }
+            }
+            finally
+            {
+                request.Body.Position = 0;
+            }
         }
 
-        public bool IsHMACAuthorization(HttpRequest request) =>
-            request.Headers[HeaderNames.Authorization]
-                .Any(value => value.StartsWith("HMAC", StringComparison.InvariantCultureIgnoreCase));
-
-        public bool TryValidateRequestTime(HttpRequest request, out string message)
+        public static bool HasAcceptableClockDrift(this HttpRequest request, ISystemClock systemClock, TimeSpan allowedClockDrift, out DateTime timestamp)
         {
-            message = null;
+            var date = request.Headers[HeaderNames.Date];
 
-            // todo: validate Date header against clock/drift settings to ensure it is within the window
+            if (!DateTime.TryParseExact(date, "o", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out timestamp))
+            { 
+                return false;
+            }
+
+            if (timestamp > systemClock.UtcNow.Add(allowedClockDrift) || timestamp < systemClock.UtcNow.Subtract(allowedClockDrift))
+            {
+                return false;
+            }
 
             return true;
         }
 
-        public bool TryValidateRequiredHeaders(HttpRequest request, string[] requiredHeaders, out string missingHeaders)
+        public static bool HasRequiredHeaders(this HttpRequest request, IEnumerable<string> requiredHeaders, out string missingHeaders)
         {
             missingHeaders = null;
-            var missing = requiredHeaders.Where(header => request.Headers[header] == string.Empty);
+            var missing = requiredHeaders.Where(header => string.IsNullOrEmpty(request.Headers[header]));
 
             if (missing.Any())
             {
@@ -148,7 +209,11 @@ namespace HMACAuth
             return true;
         }
 
-        public bool TryValidateAuthorizationHeader(HttpRequest request, out (string Key, string Digest) credentials, out string error)
+        public static bool HasHMACAuthorizationHeader(this HttpRequest request) =>
+            request.Headers[HeaderNames.Authorization]
+                .Any(value => value.StartsWith("HMAC", StringComparison.InvariantCultureIgnoreCase));
+
+        public static bool TryGetHMACCredentials(this HttpRequest request, out (string Key, string Digest) credentials, out string error)
         {
             credentials = (null, null);
             error = "Unknown error";
@@ -162,11 +227,11 @@ namespace HMACAuth
             }
 
             var header = headers[0];
-            var pattern = "^HMAC [a-zA-Z0-9-]{36}:[a-zA-Z0-9]{64}$";
+            var pattern = @"^HMAC [a-zA-Z0-9-]{36}:[A-Za-z0-9+\/=]{44}$";
 
             if (!Regex.IsMatch(header, pattern, RegexOptions.IgnoreCase))
             {
-                error = $"Invalid format; expected 'HMAC <access key:36>:<message digest:64>', received {header}";
+                error = $"Invalid format; expected 'HMAC <access key:36>:<message digest:44>', received {header}";
                 return false;
             }
 
@@ -187,7 +252,12 @@ namespace HMACAuth
 
     public class HMACAuthenticationOptions : AuthenticationSchemeOptions
     {
+        public HMACAuthenticationOptions()
+        {
+        }
 
+        public TimeSpan ClockDrift { get; set; } = new TimeSpan(hours: 0, minutes: 5, seconds: 0);
+        public IEnumerable<string> RequiredHeaders { get; set; }
     }
 
     public static class Utility
