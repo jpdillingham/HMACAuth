@@ -19,8 +19,7 @@
 
     public class HMACAuthenticationHandler : AuthenticationHandler<HMACAuthenticationOptions>
     {
-        private const string EncryptionKey = "/6LwiUfklpJ4xAFSJHeBZMF8n6ZGAWsLf/7uag8k61w=";
-        private const string EncryptionIV = "PCYjFgMld5JHGIbXLe7jAg==";
+        private const string EncryptionKeyBase64 = "8QvabgTFjjxbO6pcPvMxzo8lQ8gCXGwSHUJ5GbJ4TggXkRJD7Np4NzHZpn8UA0EZ";
 
         public HMACAuthenticationHandler(IOptionsMonitor<HMACAuthenticationOptions> optionsMonitor, ILoggerFactory logger, UrlEncoder urlEncoder, ISystemClock systemClock)
             : base(optionsMonitor, logger, urlEncoder, systemClock)
@@ -28,10 +27,11 @@
             ApiKeys.Add("088546f2-aba0-49d0-9323-4b07bf926ab1", new ApiKey()
             {
                 AccessKey = "088546f2-aba0-49d0-9323-4b07bf926ab1",
-                EncryptedSecretKey = Utility.Encrypt("pWN4NAwKk+SUokEvDNZ4fcX3t2ozTFPgypXKchk1ulM=", EncryptionKey, EncryptionIV)
+                EncryptedSecretKey = Encryption.Encrypt("pWN4NAwKk+SUokEvDNZ4fcX3t2ozTFPgypXKchk1ulM=", EncryptionKey.Value)
             });
         }
 
+        private Lazy<Encryption.AesEncryptionKey> EncryptionKey { get; } = new Lazy<Encryption.AesEncryptionKey>(() => Encryption.AesEncryptionKey.FromBase64String(EncryptionKeyBase64));
         private Dictionary<string, ApiKey> ApiKeys { get; } = new Dictionary<string, ApiKey>();
         private IEnumerable<string> RequiredSignatureHeaders { get; } = new[]
         {
@@ -43,13 +43,13 @@
         };
 
         protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
-        {
+        {            
             if (!Request.HasHMACAuthorizationHeader())
             {
                 return AuthenticateResult.NoResult();
             }
 
-            AuthenticateResult Fail(string message)
+            static AuthenticateResult Fail(string message)
             {
                 return AuthenticateResult.Fail(message);
             }
@@ -85,16 +85,16 @@
                 await Request.GetBodyMD5()
             };
 
-            var signature = Encoding.UTF8.GetBytes(string.Join(':', parts));
+            var signature = string.Join(':', parts);
 
             var apiKey = ApiKeys[credentials.Key];
-            var key = Convert.FromBase64String(Utility.Decrypt(apiKey.EncryptedSecretKey, EncryptionKey, EncryptionIV));
+            var key = Convert.FromBase64String(Encryption.Decrypt(apiKey.EncryptedSecretKey, EncryptionKey.Value));
 
             var digest = string.Empty;
 
             using (HMAC hmac = new HMACSHA256(key))
             {
-                digest = Convert.ToBase64String(hmac.ComputeHash(signature));
+                digest = Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(signature)));
             }
 
             if (digest == credentials.Digest)
