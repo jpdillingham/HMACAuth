@@ -4,14 +4,14 @@ namespace HMACAuth.Security.Cryptography
     using System;
     using System.Security.Cryptography;
 
-    public class AesEncryptionKey
+    public class EncryptionKey
     {
-        public AesEncryptionKey()
+        public EncryptionKey()
             : this(GenerateRandomKey(), GenerateRandomIV())
         {
         }
 
-        public AesEncryptionKey(byte[] key, byte[] iv)
+        public EncryptionKey(byte[] key, byte[] iv)
         {
             if (key.Length != Constants.KeySizeInBytes)
             {
@@ -64,7 +64,7 @@ namespace HMACAuth.Security.Cryptography
         public override string ToString() => ToBase64String();
         public string ToBase64String() => Convert.ToBase64String(ToByteArray());
 
-        public static AesEncryptionKey FromByteArray(byte[] bytes)
+        public static EncryptionKey FromByteArray(byte[] bytes)
         {
             if (bytes.Length != Constants.KeySizeInBytes + Constants.BlockSizeInBytes)
             {
@@ -75,10 +75,10 @@ namespace HMACAuth.Security.Cryptography
             var key = mem.Slice(0, Constants.KeySizeInBytes);
             var iv = mem.Slice(Constants.KeySizeInBytes, Constants.BlockSizeInBytes);
 
-            return new AesEncryptionKey(key.ToArray(), iv.ToArray());
+            return new EncryptionKey(key.ToArray(), iv.ToArray());
         }
 
-        public static AesEncryptionKey FromBase64String(string base64Key)
+        public static EncryptionKey FromBase64String(string base64Key)
         {
             return FromByteArray(Convert.FromBase64String(base64Key));
         }

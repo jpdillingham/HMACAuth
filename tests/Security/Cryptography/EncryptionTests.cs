@@ -1,7 +1,7 @@
 ﻿namespace HMACAuth.Tests.Security
 {
     using AutoFixture.Xunit2;
-    using HMACAuth.Security;
+    using HMACAuth.Security.Cryptography;
     using Xunit;
 
     public class EncryptionTests
@@ -9,10 +9,10 @@
         [Theory, AutoData]
         public void EncryptionRoundTripMatches(string plainText)
         {
-            var key = new Cryptography.AesEncryptionKey();
+            var key = new EncryptionKey();
 
-            var cipherText = Cryptography.Encrypt(plainText, key);
-            var uncipheredText = Cryptography.Decrypt(cipherText, key);
+            var cipherText = Encryption.Encrypt(plainText, key);
+            var uncipheredText = Encryption.Decrypt(cipherText, key);
 
             Assert.Equal(plainText, uncipheredText);
         }

@@ -4,9 +4,9 @@
     using System.IO;
     using System.Security.Cryptography;
 
-    public class AesEncryption
+    public class Encryption
     {
-        public static string Encrypt(string plainText, AesEncryptionKey key)
+        public static string Encrypt(string plainText, EncryptionKey key)
         {
             using var aes = Aes.Create();
             aes.KeySize = Constants.KeySizeInBits;
@@ -23,7 +23,7 @@
             return Convert.ToBase64String(memoryStream.ToArray());
         }
 
-        public static string Decrypt(string cipherText, AesEncryptionKey key)
+        public static string Decrypt(string cipherText, EncryptionKey key)
         {
             using var aes = Aes.Create();
             aes.KeySize = Constants.KeySizeInBits;

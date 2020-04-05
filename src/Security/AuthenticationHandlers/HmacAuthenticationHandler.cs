@@ -6,11 +6,13 @@
     using Microsoft.Extensions.Logging;
     using Microsoft.Extensions.Options;
     using Microsoft.Net.Http.Headers;
+    using NetTools;
     using System;
     using System.Collections.Generic;
     using System.Globalization;
     using System.IO;
     using System.Linq;
+    using System.Net;
     using System.Security.Cryptography;
     using System.Security.Principal;
     using System.Text;
@@ -25,14 +27,18 @@
         public HmacAuthenticationHandler(IOptionsMonitor<HmacAuthenticationOptions> optionsMonitor, ILoggerFactory logger, UrlEncoder urlEncoder, ISystemClock systemClock)
             : base(optionsMonitor, logger, urlEncoder, systemClock)
         {
+            var localHostOnly = "127.0.0.1/32,::1/128";
+            var wideOpen = "0.0.0.0/0,::/0";
+
             ApiKeys.Add("088546f2-aba0-49d0-9323-4b07bf926ab1", new ApiKey()
             {
                 AccessKey = "088546f2-aba0-49d0-9323-4b07bf926ab1",
-                EncryptedSecretKey = AesEncryption.Encrypt("pWN4NAwKk+SUokEvDNZ4fcX3t2ozTFPgypXKchk1ulM=", EncryptionKey.Value)
+                EncryptedSecretKey = Encryption.Encrypt("pWN4NAwKk+SUokEvDNZ4fcX3t2ozTFPgypXKchk1ulM=", EncryptionKey.Value),
+                CIDRs = localHostOnly
             });
         }
 
-        private Lazy<AesEncryptionKey> EncryptionKey { get; } = new Lazy<AesEncryptionKey>(() => AesEncryptionKey.FromBase64String(EncryptionKeyBase64));
+        private Lazy<EncryptionKey> EncryptionKey { get; } = new Lazy<EncryptionKey>(() => Cryptography.EncryptionKey.FromBase64String(EncryptionKeyBase64));
         private Dictionary<string, ApiKey> ApiKeys { get; } = new Dictionary<string, ApiKey>();
         private IEnumerable<string> RequiredSignatureHeaders { get; } = new[]
         {
@@ -72,12 +78,14 @@
 
             if (!ApiKeys.ContainsKey(credentials.Key))
             {
-                return Fail("Unrecognized access key");
+                return Fail($"Unrecognized access key: {credentials.Key}");
             }
 
-            if (<Request CIDR doesn't match config>) 
+            var apiKey = ApiKeys[credentials.Key];
+
+            if (!RemoteIPIsInRange(Request, apiKey.CIDRs, out var remoteIP, out _))
             {
-                return Fail("Origin IP not authorized");
+                return Fail($"Origin IP {remoteIP} not authorized");
             }
 
             var parts = new string[]
@@ -93,8 +101,7 @@
 
             var signature = string.Join(':', parts);
 
-            var apiKey = ApiKeys[credentials.Key];
-            var key = Convert.FromBase64String(AesEncryption.Decrypt(apiKey.EncryptedSecretKey, EncryptionKey.Value));
+            var key = Convert.FromBase64String(Encryption.Decrypt(apiKey.EncryptedSecretKey, EncryptionKey.Value));
 
             var digest = string.Empty;
 
@@ -132,6 +139,49 @@
             {
                 request.Body.Position = 0;
             }
+        }
+
+        public static bool RemoteIPIsInRange(HttpRequest request, string cidrs, out IPAddress ip, out IPAddressRange matchedRange)
+        {
+            IEnumerable<IPAddressRange> ranges;
+
+            try
+            {
+                ranges = cidrs.Split(',').Select(cidr => IPAddressRange.Parse(cidr));
+            }
+            catch (Exception ex)
+            {
+                throw new ArgumentException("Failed to parse CIDRs from given value", nameof(cidrs), ex);
+            }
+
+            IPAddress rip;
+
+            // when running behind a load balancer, the original client IP will be stored in the X-Forwarded-For header
+            if (request.Headers.ContainsKey("X-Forwarded-For"))
+            {
+                rip = IPAddress.Parse(request.Headers["X-Forwarded-For"]);
+            }
+            else
+            {
+                rip = request.HttpContext.Connection.RemoteIpAddress;
+            }
+
+            ip = rip;
+
+            foreach (var range in ranges)
+            {
+                Console.WriteLine($"checking whether {rip} is in range {range}");
+
+                if (range.Contains(rip))
+                {
+                    ip = rip;
+                    matchedRange = range;
+                    return true;
+                }
+            }
+
+            matchedRange = null;
+            return false;
         }
 
         public static bool HasAcceptableClockDrift(HttpRequest request, ISystemClock systemClock, TimeSpan allowedClockDrift, string dateTimeFormat, out DateTime timestamp, out string error)
