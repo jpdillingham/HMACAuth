@@ -75,6 +75,11 @@
                 return Fail("Unrecognized access key");
             }
 
+            if (<Request CIDR doesn't match config>) 
+            {
+                return Fail("Origin IP not authorized");
+            }
+
             var parts = new string[]
             {
                 Request.Method,
