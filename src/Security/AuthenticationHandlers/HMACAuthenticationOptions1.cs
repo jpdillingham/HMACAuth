@@ -3,9 +3,9 @@
     using Microsoft.AspNetCore.Authentication;
     using System;
 
-    public class HMACAuthenticationOptions : AuthenticationSchemeOptions
+    public class HmacAuthenticationOptions : AuthenticationSchemeOptions
     {
-        public HMACAuthenticationOptions()
+        public HmacAuthenticationOptions()
         {
         }
 

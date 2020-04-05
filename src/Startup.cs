@@ -23,7 +23,7 @@ namespace HMACAuth
             services.AddControllers();
 
             services.AddAuthentication("HMAC")
-                .AddScheme<HMACAuthenticationOptions, HMACAuthenticationHandler>("HMAC", options => 
+                .AddScheme<HmacAuthenticationOptions, HmacAuthenticationHandler>("HMAC", options => 
                 {
                     options.DateTimeFormat = "yyyy-MM-ddTHH:mm:ss.fffK";
                     options.ClockDrift = new TimeSpan(hours: 24, minutes: 0, seconds: 0);
