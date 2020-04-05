@@ -17,7 +17,7 @@ const md5 = crypto.createHash('md5').update(body).digest("hex");
 
 var signature = `${method}:${path}:${queryString}:${requestId}:${date}:${body.length}:${md5}`;
 
-var digest = crypto.createHmac('SHA256', Buffer(secretKey, "base64")).update(signature, 'utf8').digest('base64');
+var digest = crypto.createHmac('SHA256', Buffer.from(secretKey, "base64")).update(signature, 'utf8').digest('base64');
 
 const headers = {
   "Request-Id": requestId,

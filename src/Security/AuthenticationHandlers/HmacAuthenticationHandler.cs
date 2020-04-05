@@ -170,8 +170,6 @@
 
             foreach (var range in ranges)
             {
-                Console.WriteLine($"checking whether {rip} is in range {range}");
-
                 if (range.Contains(rip))
                 {
                     ip = rip;
