@@ -30,12 +30,14 @@
             var localHostOnly = "127.0.0.1/32,::1/128";
             var wideOpen = "0.0.0.0/0,::/0";
 
-            ApiKeys.Add("088546f2-aba0-49d0-9323-4b07bf926ab1", new ApiKey()
+            ApiKeys.Add("088546f2aba049d093234b07bf926ab1", new ApiKey()
             {
-                AccessKey = "088546f2-aba0-49d0-9323-4b07bf926ab1",
+                AccessKey = "088546f2aba049d093234b07bf926ab1",
                 EncryptedSecretKey = Encryption.Encrypt("pWN4NAwKk+SUokEvDNZ4fcX3t2ozTFPgypXKchk1ulM=", EncryptionKey.Value),
                 CIDRs = localHostOnly
             });
+
+            var x = 1;
         }
 
         private Lazy<EncryptionKey> EncryptionKey { get; } = new Lazy<EncryptionKey>(() => Cryptography.EncryptionKey.FromBase64String(EncryptionKeyBase64));
@@ -234,11 +236,11 @@
             }
 
             var header = headers[0];
-            var pattern = @"^HMAC [a-zA-Z0-9-]{36}:[A-Za-z0-9+\/=]{44}$";
+            var pattern = @"^HMAC [a-zA-Z0-9-]{32}:[A-Za-z0-9+\/=]{44}$";
 
             if (!Regex.IsMatch(header, pattern, RegexOptions.IgnoreCase))
             {
-                error = $"Invalid format; expected 'HMAC <access key:36>:<message digest:44>', received {header}";
+                error = $"Invalid format; expected 'HMAC <access key:32>:<message digest:44>', received {header}";
                 return false;
             }
 
@@ -246,9 +248,9 @@
             var key = parts[1];
             var digest = parts[2];
 
-            if (!Guid.TryParseExact(key, "D", out _))
+            if (!Guid.TryParseExact(key, "N", out _))
             {
-                error = $"Access key is not a valid GUID/UUID; expected format '00000000-0000-0000-0000-000000000000', received {key}";
+                error = $"Access key is not a valid GUID/UUID; expected 32 character (no hyphen) string, received {key}";
                 return false;
             }
 

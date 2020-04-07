@@ -2,7 +2,7 @@ const uuidv4 = require('uuid').v4;
 const crypto = require('crypto');
 const fetch = require('node-fetch');
 
-const accessKey = '088546f2-aba0-49d0-9323-4b07bf926ab1'
+const accessKey = '088546f2aba049d093234b07bf926ab1'
 const secretKey = 'pWN4NAwKk+SUokEvDNZ4fcX3t2ozTFPgypXKchk1ulM=' // this is going to show up on that one website due the the amount of entropy
 
 const method = 'POST';
