@@ -11,6 +11,7 @@
             using var aes = Aes.Create();
             aes.KeySize = Constants.KeySizeInBits;
             aes.BlockSize = Constants.BlockSizeInBits;
+            aes.Mode = CipherMode.CBC;
 
             using var encryptor = aes.CreateEncryptor(key.Key, key.IV);
             using var memoryStream = new MemoryStream();
@@ -28,6 +29,7 @@
             using var aes = Aes.Create();
             aes.KeySize = Constants.KeySizeInBits;
             aes.BlockSize = Constants.BlockSizeInBits;
+            aes.Mode = CipherMode.CBC;
 
             using var decryptor = aes.CreateDecryptor(key.Key, key.IV);
             using var memoryStream = new MemoryStream(Convert.FromBase64String(cipherText));
