@@ -36,8 +36,6 @@
                 EncryptedSecretKey = Encryption.Encrypt("pWN4NAwKk+SUokEvDNZ4fcX3t2ozTFPgypXKchk1ulM=", EncryptionKey.Value),
                 CIDRs = localHostOnly
             });
-
-            var x = 1;
         }
 
         private Lazy<EncryptionKey> EncryptionKey { get; } = new Lazy<EncryptionKey>(() => Cryptography.EncryptionKey.FromBase64String(EncryptionKeyBase64));
